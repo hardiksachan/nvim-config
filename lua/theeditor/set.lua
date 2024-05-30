@@ -3,6 +3,12 @@
 vim.opt.nu = true
 vim.opt.relativenumber = true
 
+vim.opt.inccommand = "split"
+
+-- best search settings
+vim.opt.smartcase = true
+vim.opt.ignorecase = true
+
 vim.opt.tabstop = 4
 vim.opt.softtabstop = 4
 vim.opt.shiftwidth = 4
@@ -28,5 +34,6 @@ vim.opt.isfname:append("@-@")
 
 vim.opt.updatetime = 50
 
+vim.opt_local.conceallevel = 1
 -- vim.opt.colorcolumn = "80"
 

@@ -13,7 +13,9 @@ return {
         "j-hui/fidget.nvim",
         "rafamadriz/friendly-snippets",
     },
-
+    opts = {
+        inlay_hints = { enabled = true },
+    },
     config = function()
         local cmp = require("cmp")
         local cmp_lsp = require("cmp_nvim_lsp")
