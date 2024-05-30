@@ -1,100 +1,184 @@
 return {
     "neovim/nvim-lspconfig",
     dependencies = {
+        -- vim completions
+        "folke/neodev.nvim",
+        -- lsp server manager
         "williamboman/mason.nvim",
         "williamboman/mason-lspconfig.nvim",
-        "hrsh7th/cmp-nvim-lsp",
-        "hrsh7th/cmp-buffer",
-        "hrsh7th/cmp-path",
-        "hrsh7th/cmp-cmdline",
-        "hrsh7th/nvim-cmp",
-        "L3MON4D3/LuaSnip",
-        "saadparwaiz1/cmp_luasnip",
+        "WhoIsSethDaniel/mason-tool-installer.nvim",
+        -- mini ui of progress on right
         "j-hui/fidget.nvim",
-        "rafamadriz/friendly-snippets",
+        -- autoformatting
+        "stevearc/conform.nvim",
+        -- json schema information
+        "b0o/SchemaStore.nvim",
     },
     opts = {
         inlay_hints = { enabled = true },
     },
     config = function()
-        local cmp = require("cmp")
-        local cmp_lsp = require("cmp_nvim_lsp")
-        local capabilities = vim.tbl_deep_extend(
-            "force",
-            {},
-            vim.lsp.protocol.make_client_capabilities(),
-            cmp_lsp.default_capabilities()
-        )
-        require("luasnip.loaders.from_vscode").lazy_load()
+        require("neodev").setup()
 
-        require("fidget").setup({})
-        require("mason").setup()
-        require("mason-lspconfig").setup({
-            ensure_installed = {
-                "lua_ls",
-                "rust_analyzer",
-                "gopls",
-            },
-            handlers = {
-                function(server_name) -- default handler (optional)
-                    require("lspconfig")[server_name].setup({
-                        capabilities = capabilities,
-                    })
-                end,
+        local capabilities = nil
+        if pcall(require, "cmp_nvim_lsp") then
+            capabilities = require("cmp_nvim_lsp").default_capabilities()
+        end
 
-                ["lua_ls"] = function()
-                    local lspconfig = require("lspconfig")
-                    lspconfig.lua_ls.setup({
-                        capabilities = capabilities,
-                        settings = {
-                            Lua = {
-                                runtime = { version = "Lua 5.1" },
-                                diagnostics = {
-                                    globals = { "vim", "it", "describe", "before_each", "after_each" },
-                                },
-                            },
+        local lspconfig = require("lspconfig")
+
+        local servers = {
+            bashls = true,
+            gopls = {
+                settings = {
+                    gopls = {
+                        hints = {
+                            assignVariableTypes = true,
+                            compositeLiteralFields = true,
+                            compositeLiteralTypes = true,
+                            constantValues = true,
+                            functionTypeParameters = true,
+                            parameterNames = true,
+                            rangeVariableTypes = true,
                         },
-                    })
-                end,
+                    },
+                },
+            },
+            lua_ls = {
+                server_capabilities = {
+                    semanticTokensProvider = vim.NIL,
+                },
+            },
+            rust_analyzer = true,
+            svelte = true,
+            templ = true,
+            cssls = true,
+
+            -- Probably want to disable formatting for this lang server
+            tsserver = {
+                server_capabilities = {
+                    documentFormattingProvider = false,
+                },
+            },
+            biome = true,
+
+            jsonls = {
+                settings = {
+                    json = {
+                        schemas = require("schemastore").json.schemas(),
+                        validate = { enable = true },
+                    },
+                },
+            },
+
+            yamlls = {
+                settings = {
+                    yaml = {
+                        schemaStore = {
+                            enable = false,
+                            url = "",
+                        },
+                        schemas = require("schemastore").yaml.schemas(),
+                    },
+                },
+            },
+
+            clangd = {
+                -- TODO: Could include cmd, but not sure those were all relevant flags.
+                --    looks like something i would have added while i was floundering
+                init_options = { clangdFileStatus = true },
+                filetypes = { "c" },
+            },
+        }
+
+        local servers_to_install = vim.tbl_filter(function(key)
+            local t = servers[key]
+            if type(t) == "table" then
+                return not t.manual_install
+            else
+                return t
+            end
+        end, vim.tbl_keys(servers))
+
+        require("mason").setup()
+        local ensure_installed = {
+            "stylua",
+            "lua_ls",
+            "delve",
+        }
+
+        vim.list_extend(ensure_installed, servers_to_install)
+        require("mason-tool-installer").setup({ ensure_installed = ensure_installed })
+
+        for name, config in pairs(servers) do
+            if config == true then
+                config = {}
+            end
+            config = vim.tbl_deep_extend("force", {}, { capabilities = capabilities }, config)
+
+            lspconfig[name].setup(config)
+        end
+
+        local disable_semantic_tokens = {
+            lua = true,
+        }
+
+        vim.api.nvim_create_autocmd("LspAttach", {
+            callback = function(args)
+                local bufnr = args.buf
+                local client = assert(vim.lsp.get_client_by_id(args.data.client_id), "must have valid client")
+
+                local settings = servers[client.name]
+                if type(settings) ~= "table" then
+                    settings = {}
+                end
+
+                local builtin = require("telescope.builtin")
+
+                vim.opt_local.omnifunc = "v:lua.vim.lsp.omnifunc"
+                vim.keymap.set("n", "gd", builtin.lsp_definitions, { buffer = 0 })
+                vim.keymap.set("n", "gr", builtin.lsp_references, { buffer = 0 })
+                vim.keymap.set("n", "gD", vim.lsp.buf.declaration, { buffer = 0 })
+                vim.keymap.set("n", "gT", vim.lsp.buf.type_definition, { buffer = 0 })
+                vim.keymap.set("n", "K", vim.lsp.buf.hover, { buffer = 0 })
+
+                vim.keymap.set("n", "<space>cr", vim.lsp.buf.rename, { buffer = 0 })
+                vim.keymap.set("n", "<space>ca", vim.lsp.buf.code_action, { buffer = 0 })
+
+                local filetype = vim.bo[bufnr].filetype
+                if disable_semantic_tokens[filetype] then
+                    client.server_capabilities.semanticTokensProvider = nil
+                end
+
+                -- Override server capabilities
+                if settings.server_capabilities then
+                    for k, v in pairs(settings.server_capabilities) do
+                        if v == vim.NIL then
+                            ---@diagnostic disable-next-line: cast-local-type
+                            v = nil
+                        end
+
+                        client.server_capabilities[k] = v
+                    end
+                end
+            end,
+        })
+
+        -- Autoformatting Setup
+        require("conform").setup({
+            formatters_by_ft = {
+                lua = { "stylua" },
             },
         })
 
-        local cmp_select = { behavior = cmp.SelectBehavior.Select }
-
-        cmp.setup({
-            snippet = {
-                expand = function(args)
-                    require("luasnip").lsp_expand(args.body) -- For `luasnip` users.
-                end,
-            },
-            window = {
-                completion = cmp.config.window.bordered(),
-                documentation = cmp.config.window.bordered(),
-            },
-            mapping = cmp.mapping.preset.insert({
-                ["<C-k>"] = cmp.mapping.select_prev_item(cmp_select),
-                ["<C-j>"] = cmp.mapping.select_next_item(cmp_select),
-                ["<C-y>"] = cmp.mapping.confirm({ select = true }),
-                ["<C-Space>"] = cmp.mapping.complete(),
-            }),
-            sources = cmp.config.sources({
-                { name = "nvim_lsp" },
-                { name = "luasnip" }, -- For luasnip users.
-            }, {
-                { name = "buffer" },
-            }),
-        })
-
-        vim.diagnostic.config({
-            -- update_in_insert = true,
-            float = {
-                focusable = false,
-                style = "minimal",
-                border = "rounded",
-                source = "always",
-                header = "",
-                prefix = "",
-            },
+        vim.api.nvim_create_autocmd("BufWritePre", {
+            callback = function(args)
+                require("conform").format({
+                    bufnr = args.buf,
+                    lsp_fallback = true,
+                    quiet = true,
+                })
+            end,
         })
     end,
 }
